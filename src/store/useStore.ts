@@ -12,6 +12,7 @@ export interface User {
   role: Role;
   farmId?: string;
   isActive: boolean;
+  passwordHash: string;
 }
 
 export interface Farm {
@@ -89,7 +90,8 @@ interface StoreState {
   closures: DailyClosure[];
   currentUser: User | null;
 
-  login: (username: string) => void;
+  initStore: (data: any) => void;
+  login: (username: string, password: string) => { success: boolean; error?: string } | void;
   logout: () => void;
   
   // Super Admin actions
@@ -109,7 +111,6 @@ interface StoreState {
   addExpense: (data: Omit<Expense, 'id' | 'date'>) => void;
   addReceipt: (amount: number, workerId: string, farmId: string, description: string) => void;
   addClosure: (data: Omit<DailyClosure, 'id' | 'closedAt'>) => void;
-  initStore: (data: any) => void;
 }
 
 const generateRef = () => `TRX-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`;
@@ -129,9 +130,14 @@ export const useStore = create<StoreState>()(
 
       initStore: (data) => set(() => ({ ...data })),
 
-      login: (username) => {
+      login: (username: string, password: string) => {
         const user = get().users.find(u => u.username === username);
-        if (user) set({ currentUser: user });
+        if (!user) return { success: false, error: 'اسم المستخدم غير صحيح' };
+        if (user.passwordHash !== password) return { success: false, error: 'كلمة المرور غير صحيحة' };
+        if (!user.isActive) return { success: false, error: 'هذا الحساب موقوف، يرجى مراجعة مدير النظام' };
+        
+        set({ currentUser: user });
+        return { success: true };
       },
       
       logout: () => set({ currentUser: null }),
@@ -147,33 +153,47 @@ export const useStore = create<StoreState>()(
         supabaseMutation('User', 'update', data, { id }).catch(console.error);
       },
 
-      addTruckType: (name) => set(state => ({
-        truckTypes: [...state.truckTypes, { id: uuidv4(), name, isActive: true }]
-      })),
+      addTruckType: (name) => {
+        const newType = { id: uuidv4(), name, isActive: true };
+        set(state => ({ truckTypes: [...state.truckTypes, newType] }));
+        supabaseMutation('TruckType', 'insert', newType).catch(console.error);
+      },
 
-      toggleTruckType: (id) => set(state => ({
-        truckTypes: state.truckTypes.map(t => t.id === id ? { ...t, isActive: !t.isActive } : t)
-      })),
+      toggleTruckType: (id) => {
+        const item = get().truckTypes.find(t => t.id === id);
+        if (!item) return;
+        set(state => ({ truckTypes: state.truckTypes.map(t => t.id === id ? { ...t, isActive: !t.isActive } : t) }));
+        supabaseMutation('TruckType', 'update', { isActive: !item.isActive }, { id }).catch(console.error);
+      },
 
-      deleteTruckType: (id) => set(state => ({
-        truckTypes: state.truckTypes.filter(t => t.id !== id)
-      })),
+      deleteTruckType: (id) => {
+        set(state => ({ truckTypes: state.truckTypes.filter(t => t.id !== id) }));
+        supabaseMutation('TruckType', 'delete', null, { id }).catch(console.error);
+      },
 
-      addExpenseCategory: (name) => set(state => ({
-        expenseCategories: [...state.expenseCategories, { id: uuidv4(), name, isActive: true }]
-      })),
+      addExpenseCategory: (name) => {
+        const newCat = { id: uuidv4(), name, isActive: true };
+        set(state => ({ expenseCategories: [...state.expenseCategories, newCat] }));
+        supabaseMutation('ExpenseCategory', 'insert', newCat).catch(console.error);
+      },
 
-      toggleExpenseCategory: (id) => set(state => ({
-        expenseCategories: state.expenseCategories.map(t => t.id === id ? { ...t, isActive: !t.isActive } : t)
-      })),
+      toggleExpenseCategory: (id) => {
+        const item = get().expenseCategories.find(t => t.id === id);
+        if (!item) return;
+        set(state => ({ expenseCategories: state.expenseCategories.map(t => t.id === id ? { ...t, isActive: !t.isActive } : t) }));
+        supabaseMutation('ExpenseCategory', 'update', { isActive: !item.isActive }, { id }).catch(console.error);
+      },
 
-      deleteExpenseCategory: (id) => set(state => ({
-        expenseCategories: state.expenseCategories.filter(t => t.id !== id)
-      })),
+      deleteExpenseCategory: (id) => {
+        set(state => ({ expenseCategories: state.expenseCategories.filter(t => t.id !== id) }));
+        supabaseMutation('ExpenseCategory', 'delete', null, { id }).catch(console.error);
+      },
 
-      addFarm: (name) => set(state => ({
-        farms: [...state.farms, { id: uuidv4(), name }]
-      })),
+      addFarm: (name) => {
+        const newFarm = { id: uuidv4(), name };
+        set(state => ({ farms: [...state.farms, newFarm] }));
+        supabaseMutation('Farm', 'insert', newFarm).catch(console.error);
+      },
 
       registerTruck: (data) => {
         const state = get();
@@ -227,6 +247,12 @@ export const useStore = create<StoreState>()(
           transactions: [...newTransactions, ...state.transactions],
         }));
 
+        // Persist to Supabase
+        supabaseMutation('TruckRegistration', 'insert', newRegistration).catch(console.error);
+        newTransactions.forEach(trx => {
+          supabaseMutation('Transaction', 'insert', trx).catch(console.error);
+        });
+
         return { success: true };
       },
 
@@ -246,10 +272,14 @@ export const useStore = create<StoreState>()(
         updatedTransactions = updatedTransactions.map(trx => {
           if (trx.farmId === oldTruck.farmId && trx.date.split('T')[0] === targetDateStr) {
             if (trx.type === 'CUSTODY' && trx.description === oldCustodyDesc) {
-              return { ...trx, amount: newTruck.custodyAmount, description: `عهدة للعربية ${newTruck.truckNumber}` };
+              const updated = { ...trx, amount: newTruck.custodyAmount, description: `عهدة للعربية ${newTruck.truckNumber}` };
+              supabaseMutation('Transaction', 'update', { amount: updated.amount, description: updated.description }, { id: trx.id }).catch(console.error);
+              return updated;
             }
             if (trx.type === 'OVERNIGHT' && trx.description === oldOvernightDesc) {
-              return { ...trx, amount: newTruck.overnightAmount, description: `مبيت للعربية ${newTruck.truckNumber}` };
+              const updated = { ...trx, amount: newTruck.overnightAmount, description: `مبيت للعربية ${newTruck.truckNumber}` };
+              supabaseMutation('Transaction', 'update', { amount: updated.amount, description: updated.description }, { id: trx.id }).catch(console.error);
+              return updated;
             }
           }
           return trx;
@@ -257,36 +287,44 @@ export const useStore = create<StoreState>()(
 
         const hasCustodyTrx = updatedTransactions.some(t => t.description === `عهدة للعربية ${newTruck.truckNumber}` && t.farmId === newTruck.farmId && t.date.split('T')[0] === targetDateStr);
         if (!hasCustodyTrx && newTruck.custodyAmount > 0) {
-          updatedTransactions.push({
+          const newTrx = {
             id: uuidv4(),
             referenceNumber: generateRef(),
-            type: 'CUSTODY',
+            type: 'CUSTODY' as const,
             amount: newTruck.custodyAmount,
             description: `عهدة للعربية ${newTruck.truckNumber}`,
             farmId: newTruck.farmId,
             workerId: newTruck.workerId,
             date: oldTruck.date,
-          });
+          };
+          updatedTransactions.push(newTrx);
+          supabaseMutation('Transaction', 'insert', newTrx).catch(console.error);
         }
         
         const hasOvernightTrx = updatedTransactions.some(t => t.description === `مبيت للعربية ${newTruck.truckNumber}` && t.farmId === newTruck.farmId && t.date.split('T')[0] === targetDateStr);
         if (!hasOvernightTrx && newTruck.overnightAmount > 0) {
-          updatedTransactions.push({
+          const newTrx = {
             id: uuidv4(),
             referenceNumber: generateRef(),
-            type: 'OVERNIGHT',
+            type: 'OVERNIGHT' as const,
             amount: newTruck.overnightAmount,
             description: `مبيت للعربية ${newTruck.truckNumber}`,
             farmId: newTruck.farmId,
             workerId: newTruck.workerId,
             date: oldTruck.date,
-          });
+          };
+          updatedTransactions.push(newTrx);
+          supabaseMutation('Transaction', 'insert', newTrx).catch(console.error);
         }
 
         set(state => ({
           truckRegistrations: state.truckRegistrations.map(t => t.id === id ? newTruck : t),
           transactions: updatedTransactions,
         }));
+
+        // Persist truck update to Supabase
+        const { id: _id, ...truckUpdateData } = newTruck;
+        supabaseMutation('TruckRegistration', 'update', truckUpdateData, { id }).catch(console.error);
 
         return { success: true };
       },

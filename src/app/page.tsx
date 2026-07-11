@@ -1,15 +1,191 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef, createContext, useContext } from 'react';
 import { useStore, Role, User } from '@/store/useStore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   LayoutDashboard, Truck, Wallet, Users, Settings, LogOut, Menu, 
-  Search, Bell, Sun, Moon, Plus, FileText, ChevronRight, Activity, DollarSign, Calendar, Map, MapPin, ArrowLeft, Trash2, Pencil, Archive
+  Search, Bell, Sun, Moon, Plus, FileText, ChevronRight, Activity, DollarSign, Calendar, Map, MapPin, ArrowLeft, Trash2, Pencil, Archive, AlertTriangle, CheckCircle, Info, X
 } from 'lucide-react';
 import clsx from 'clsx';
 import { format, isToday } from 'date-fns';
 import { fetchAllData } from './actions';
+
+// ===== Custom Modal System =====
+type ModalType = 'alert' | 'confirm' | 'prompt' | 'select';
+interface ModalState {
+  type: ModalType;
+  title: string;
+  message?: string;
+  inputLabel?: string;
+  inputDefault?: string;
+  options?: { value: string; label: string }[];
+  variant?: 'success' | 'error' | 'warning' | 'info';
+  resolve: (value: any) => void;
+}
+
+const ModalContext = createContext<{
+  showAlert: (title: string, variant?: 'success' | 'error' | 'warning' | 'info') => Promise<void>;
+  showConfirm: (title: string, message?: string) => Promise<boolean>;
+  showPrompt: (title: string, inputLabel?: string, defaultValue?: string) => Promise<string | null>;
+  showSelect: (title: string, options: { value: string; label: string }[]) => Promise<string | null>;
+}>({
+  showAlert: async () => {},
+  showConfirm: async () => false,
+  showPrompt: async () => null,
+  showSelect: async () => null,
+});
+
+function useModal() { return useContext(ModalContext); }
+
+function ModalProvider({ children }: { children: React.ReactNode }) {
+  const [modal, setModal] = useState<ModalState | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [inputValue, setInputValue] = useState('');
+  const [selectedValue, setSelectedValue] = useState('');
+
+  const showAlert = useCallback((title: string, variant: 'success' | 'error' | 'warning' | 'info' = 'info') => {
+    return new Promise<void>((resolve) => {
+      setModal({ type: 'alert', title, variant, resolve });
+    });
+  }, []);
+
+  const showConfirm = useCallback((title: string, message?: string) => {
+    return new Promise<boolean>((resolve) => {
+      setModal({ type: 'confirm', title, message, resolve });
+    });
+  }, []);
+
+  const showPrompt = useCallback((title: string, inputLabel?: string, defaultValue?: string) => {
+    return new Promise<string | null>((resolve) => {
+      setInputValue(defaultValue || '');
+      setModal({ type: 'prompt', title, inputLabel, inputDefault: defaultValue, resolve });
+    });
+  }, []);
+
+  const showSelect = useCallback((title: string, options: { value: string; label: string }[]) => {
+    return new Promise<string | null>((resolve) => {
+      setSelectedValue(options[0]?.value || '');
+      setModal({ type: 'select', title, options, resolve });
+    });
+  }, []);
+
+  const close = (value: any) => {
+    modal?.resolve(value);
+    setModal(null);
+  };
+
+  useEffect(() => {
+    if (modal?.type === 'prompt' && inputRef.current) {
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [modal]);
+
+  const variantIcon = {
+    success: <CheckCircle size={28} className="text-green-500" />,
+    error: <AlertTriangle size={28} className="text-red-500" />,
+    warning: <AlertTriangle size={28} className="text-yellow-500" />,
+    info: <Info size={28} className="text-blue-500" />,
+  };
+
+  return (
+    <ModalContext.Provider value={{ showAlert, showConfirm, showPrompt, showSelect }}>
+      {children}
+      <AnimatePresence>
+        {modal && (
+          <motion.div 
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4"
+            onClick={() => { if (modal.type !== 'alert') close(modal.type === 'confirm' ? false : null); }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
+              onClick={e => e.stopPropagation()}
+              className="bg-card w-full max-w-md rounded-2xl p-6 shadow-2xl border border-border/50"
+            >
+              {/* Close button */}
+              <button onClick={() => close(modal.type === 'confirm' ? false : modal.type === 'alert' ? undefined : null)} className="absolute top-4 left-4 text-muted-foreground hover:text-foreground">
+                <X size={20} />
+              </button>
+
+              {/* Header */}
+              <div className="flex items-center gap-3 mb-4">
+                {modal.variant && variantIcon[modal.variant]}
+                <h2 className="text-xl font-bold">{modal.title}</h2>
+              </div>
+
+              {modal.message && <p className="text-muted-foreground text-sm mb-4 leading-relaxed">{modal.message}</p>}
+
+              {/* Prompt input */}
+              {modal.type === 'prompt' && (
+                <div className="mb-4">
+                  {modal.inputLabel && <label className="block text-sm font-medium mb-2">{modal.inputLabel}</label>}
+                  <input
+                    ref={inputRef}
+                    value={inputValue}
+                    onChange={e => setInputValue(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') close(inputValue || null); }}
+                    className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:border-primary outline-none transition-colors"
+                    placeholder="اكتب هنا..."
+                  />
+                </div>
+              )}
+
+              {/* Select dropdown */}
+              {modal.type === 'select' && (
+                <div className="mb-4 space-y-2 max-h-[300px] overflow-y-auto">
+                  {modal.options?.map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => { setSelectedValue(opt.value); close(opt.value); }}
+                      className={clsx(
+                        "w-full text-right p-3 rounded-xl border transition-all",
+                        selectedValue === opt.value 
+                          ? "border-primary bg-primary/10 text-primary" 
+                          : "border-border/50 bg-secondary/30 hover:bg-secondary/50"
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Buttons */}
+              <div className="flex gap-3 mt-6">
+                {modal.type === 'alert' && (
+                  <button onClick={() => close(undefined)} className="flex-1 bg-primary text-white py-2.5 rounded-xl font-medium hover:bg-primary/90 transition-colors">
+                    تمام
+                  </button>
+                )}
+                {modal.type === 'confirm' && (
+                  <>
+                    <button onClick={() => close(false)} className="flex-1 bg-secondary text-foreground py-2.5 rounded-xl font-medium hover:bg-secondary/80 transition-colors">
+                      إلغاء
+                    </button>
+                    <button onClick={() => close(true)} className="flex-1 bg-primary text-white py-2.5 rounded-xl font-medium hover:bg-primary/90 transition-colors">
+                      تأكيد
+                    </button>
+                  </>
+                )}
+                {modal.type === 'prompt' && (
+                  <>
+                    <button onClick={() => close(null)} className="flex-1 bg-secondary text-foreground py-2.5 rounded-xl font-medium hover:bg-secondary/80 transition-colors">
+                      إلغاء
+                    </button>
+                    <button onClick={() => close(inputValue || null)} className="flex-1 bg-primary text-white py-2.5 rounded-xl font-medium hover:bg-primary/90 transition-colors">
+                      تأكيد
+                    </button>
+                  </>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </ModalContext.Provider>
+  );
+}
 
 export const formatArabicDate = (dString: string, includeTime = false) => {
   if (!dString) return '';
@@ -90,6 +266,7 @@ export default function Dashboard() {
   const allowedMenus = menuItems.filter(m => m.roles.includes(currentUser.role));
 
   return (
+    <ModalProvider>
     <div className="flex flex-col h-screen overflow-hidden bg-background">
       {/* Top Navbar */}
       <header className="relative h-16 glass border-b border-border/50 flex items-center justify-between px-4 sm:px-8 z-20 shrink-0 gap-4 print:hidden">
@@ -321,6 +498,7 @@ export default function Dashboard() {
         )}
       </AnimatePresence>
     </div>
+    </ModalProvider>
   );
 }
 
@@ -777,6 +955,7 @@ function TrucksView() {
 
 function FarmsView() {
   const { farms, truckRegistrations, transactions, users, addReceipt, addFarm } = useStore();
+  const { showAlert, showConfirm, showPrompt, showSelect } = useModal();
   const [selectedFarmId, setSelectedFarmId] = useState<string | null>(null);
   const todayStr = new Date().toISOString().split('T')[0];
   const [fromDate, setFromDate] = useState<string>(todayStr);
@@ -823,20 +1002,21 @@ function FarmsView() {
           </div>
           <div className="flex items-center gap-3">
             <button onClick={() => {
-                const amount = prompt('أدخل المبلغ اللي هتسلمه عهدة (مثال: 5000):');
+                const amount = await showPrompt('تسليم عهدة', 'أدخل المبلغ (مثال: 5000)');
                 if (!amount) return;
-                const workerId = prompt(`اكتب رقم (ID) العامل أو المدير اللي هيستلم:\n${farmUsers.map(u => `${u.id} - ${u.fullName}`).join('\n')}`);
-                if (!workerId || !farmUsers.find(u => u.id === workerId)) {
-                  alert('عامل غير صحيح');
+                const workerId = await showSelect('اختر العامل أو المدير', farmUsers.map(u => ({ value: u.id, label: u.fullName })));
+                if (!workerId || !farmUsers.find((u: any) => u.id === workerId)) {
+                  await showAlert('عامل غير صحيح', 'error');
                   return;
                 }
                 addReceipt(parseFloat(amount), workerId, selectedFarmId!, `تسليم عهدة نقدي للمزرعة`);
-                alert('تم تسجيل العهدة بنجاح!');
+                await showAlert('تم تسجيل العهدة بنجاح!', 'success');
             }} className="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 shadow-sm transition-colors">
               <Plus size={18} /> تسليم فلوس
             </button>
             <button onClick={() => {
-                if (!window.confirm(`هل أنت متأكد من حفظ تقفيل ${fromDate === toDate ? 'اليوم ' + formatArabicDate(fromDate) : 'الفترة المحددة'}؟\nهذا الإجراء سيقوم بحفظ التقفيل في سجل التقفيلات للطباعة والرجوع إليه لاحقاً.`)) return;
+                const confirmed = await showConfirm(`حفظ تقفيل ${fromDate === toDate ? 'اليوم ' + formatArabicDate(fromDate) : 'الفترة المحددة'}`, 'هذا الإجراء سيقوم بحفظ التقفيل في سجل التقفيلات للطباعة والرجوع إليه لاحقاً.');
+                if (!confirmed) return;
                 
                 const { addClosure, currentUser } = useStore.getState();
                 addClosure({
@@ -848,7 +1028,7 @@ function FarmsView() {
                   trucksCount: farmTrucks.length,
                 });
 
-                alert('تم حفظ التقفيل بنجاح! يمكنك مراجعته وطباعته من صفحة التقفيلات.');
+                await showAlert('تم حفظ التقفيل بنجاح! يمكنك مراجعته وطباعته من صفحة التقفيلات.', 'success');
             }} className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors shadow-sm">
               <Archive size={18} /> تقفيل اليوم
             </button>
@@ -1048,8 +1228,8 @@ function FarmsView() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold tracking-tight">إدارة المزارع</h1>
-        <button onClick={() => {
-          const name = prompt('اكتب اسم المزرعة الجديدة:');
+        <button onClick={async () => {
+          const name = await showPrompt('إضافة مزرعة جديدة', 'اسم المزرعة');
           if (name) addFarm(name);
         }} className="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2">
           <Plus size={18} /> إضافة مزرعة
@@ -1081,6 +1261,7 @@ function FarmsView() {
 
 function UsersView() {
   const { users, farms, addUser, updateUser } = useStore();
+  const { showConfirm } = useModal();
   const [isOpen, setIsOpen] = useState(false);
   const [editUser, setEditUser] = useState<User | null>(null);
 
@@ -1150,7 +1331,7 @@ function UsersView() {
                     <button onClick={() => { setEditUser(u); setIsOpen(true); }} className="text-blue-500/70 hover:text-blue-500 transition-colors p-1" title="تعديل">
                       <Pencil size={18} />
                     </button>
-                    <button onClick={() => { if(confirm('هل تريد إيقاف هذا الحساب؟')) updateUser(u.id, { isActive: false }); }} className="text-red-500/70 hover:text-red-500 transition-colors p-1" title="إيقاف">
+                    <button onClick={async () => { const ok = await showConfirm('إيقاف الحساب', 'هل تريد إيقاف هذا الحساب؟'); if(ok) updateUser(u.id, { isActive: false }); }} className="text-red-500/70 hover:text-red-500 transition-colors p-1" title="إيقاف">
                       <Trash2 size={18} />
                     </button>
                   </div>
@@ -1210,6 +1391,7 @@ function SettingsView() {
     truckTypes, expenseCategories, addTruckType, toggleTruckType, deleteTruckType, 
     addExpenseCategory, toggleExpenseCategory, deleteExpenseCategory, currentUser 
   } = useStore();
+  const { showPrompt, showConfirm } = useModal();
   
   if (currentUser?.role !== 'SUPER_ADMIN') {
     return <div>غير مصرح لك</div>;
@@ -1223,8 +1405,8 @@ function SettingsView() {
         <div className="glass rounded-2xl p-6 border border-border/50">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-xl font-semibold">أنواع العربيات</h2>
-            <button onClick={() => {
-              const name = prompt('اكتب اسم النوع الجديد:');
+            <button onClick={async () => {
+              const name = await showPrompt('إضافة نوع عربية', 'اسم النوع الجديد');
               if (name) addTruckType(name);
             }} className="text-sm bg-primary/10 text-primary px-3 py-1 rounded-lg font-medium hover:bg-primary/20 transition-colors">
               + إضافة جديد
@@ -1245,7 +1427,7 @@ function SettingsView() {
                     {t.isActive ? 'مفعل' : 'موقوف'}
                   </button>
                   <button 
-                    onClick={() => { if(confirm(`هل أنت متأكد من مسح "${t.name}"؟`)) deleteTruckType(t.id); }} 
+                    onClick={async () => { const ok = await showConfirm(`مسح "${t.name}"`, 'هل أنت متأكد؟'); if (ok) deleteTruckType(t.id); }} 
                     className="text-red-500/70 hover:text-red-500 transition-colors p-1"
                     title="مسح"
                   >
@@ -1260,8 +1442,8 @@ function SettingsView() {
         <div className="glass rounded-2xl p-6 border border-border/50">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-xl font-semibold">بنود المصروفات</h2>
-            <button onClick={() => {
-              const name = prompt('اكتب اسم البند الجديد:');
+            <button onClick={async () => {
+              const name = await showPrompt('إضافة بند مصروفات', 'اسم البند الجديد');
               if (name) addExpenseCategory(name);
             }} className="text-sm bg-primary/10 text-primary px-3 py-1 rounded-lg font-medium hover:bg-primary/20 transition-colors">
               + إضافة جديد
@@ -1282,7 +1464,7 @@ function SettingsView() {
                     {c.isActive ? 'مفعل' : 'موقوف'}
                   </button>
                   <button 
-                    onClick={() => { if(confirm(`هل أنت متأكد من مسح "${c.name}"؟`)) deleteExpenseCategory(c.id); }} 
+                    onClick={async () => { const ok = await showConfirm(`مسح "${c.name}"`, 'هل أنت متأكد؟'); if (ok) deleteExpenseCategory(c.id); }} 
                     className="text-red-500/70 hover:text-red-500 transition-colors p-1"
                     title="مسح"
                   >
@@ -1298,9 +1480,31 @@ function SettingsView() {
   )
 }
 
-function LoginView({ onLogin }: { onLogin: (username: string) => void }) {
-  const [username, setUsername] = useState('admin');
+function LoginView({ onLogin }: { onLogin: (username: string, password: string) => { success: boolean; error?: string } | void }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
   
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    
+    if (!username.trim()) {
+      setError('اكتب اسم المستخدم');
+      return;
+    }
+    if (!password.trim()) {
+      setError('اكتب كلمة المرور');
+      return;
+    }
+    
+    const result = onLogin(username, password);
+    if (result && !result.success && result.error) {
+      setError(result.error);
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4 relative overflow-hidden">
       {/* Background decoration */}
@@ -1322,22 +1526,44 @@ function LoginView({ onLogin }: { onLogin: (username: string) => void }) {
           <p className="text-muted-foreground">سجل دخول لحسابك</p>
         </div>
 
-        <form onSubmit={(e) => { e.preventDefault(); onLogin(username); }} className="space-y-6">
+        {error && (
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-red-500/10 border border-red-500/30 text-red-500 px-4 py-3 rounded-xl mb-6 text-sm text-center font-medium"
+          >
+            ⚠️ {error}
+          </motion.div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-6">
           <div>
             <label className="block text-sm font-medium mb-2">اسم المستخدم</label>
             <input 
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              onChange={(e) => { setUsername(e.target.value); setError(''); }}
               className="w-full bg-secondary/50 border border-border focus:border-primary rounded-xl px-4 py-3 outline-none transition-colors"
+              placeholder="اكتب اسم الدخول..."
             />
           </div>
           <div>
             <label className="block text-sm font-medium mb-2">كلمة المرور</label>
-            <input 
-              type="password"
-              defaultValue="password"
-              className="w-full bg-secondary/50 border border-border focus:border-primary rounded-xl px-4 py-3 outline-none transition-colors"
-            />
+            <div className="relative">
+              <input 
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => { setPassword(e.target.value); setError(''); }}
+                className="w-full bg-secondary/50 border border-border focus:border-primary rounded-xl px-4 py-3 outline-none transition-colors pl-12"
+                placeholder="اكتب كلمة المرور..."
+              />
+              <button 
+                type="button" 
+                onClick={() => setShowPassword(!showPassword)} 
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors text-sm"
+              >
+                {showPassword ? '🙈' : '👁️'}
+              </button>
+            </div>
           </div>
           <button type="submit" className="w-full bg-primary hover:bg-primary/90 text-white font-semibold py-3 rounded-xl transition-colors shadow-lg shadow-primary/20">
             دخول
