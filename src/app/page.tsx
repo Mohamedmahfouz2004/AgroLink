@@ -1001,7 +1001,7 @@ function FarmsView() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <button onClick={() => {
+            <button onClick={async () => {
                 const amount = await showPrompt('تسليم عهدة', 'أدخل المبلغ (مثال: 5000)');
                 if (!amount) return;
                 const workerId = await showSelect('اختر العامل أو المدير', farmUsers.map(u => ({ value: u.id, label: u.fullName })));
@@ -1014,7 +1014,7 @@ function FarmsView() {
             }} className="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 shadow-sm transition-colors">
               <Plus size={18} /> تسليم فلوس
             </button>
-            <button onClick={() => {
+            <button onClick={async () => {
                 const confirmed = await showConfirm(`حفظ تقفيل ${fromDate === toDate ? 'اليوم ' + formatArabicDate(fromDate) : 'الفترة المحددة'}`, 'هذا الإجراء سيقوم بحفظ التقفيل في سجل التقفيلات للطباعة والرجوع إليه لاحقاً.');
                 if (!confirmed) return;
                 
