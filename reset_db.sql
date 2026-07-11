@@ -54,6 +54,10 @@ CREATE TABLE "TruckRegistration" (
   "farmId" UUID NOT NULL REFERENCES "Farm"("id"),
   "custodyAmount" DOUBLE PRECISION NOT NULL DEFAULT 0,
   "overnightAmount" DOUBLE PRECISION NOT NULL DEFAULT 0,
+  "driverName" TEXT,
+  "driverPhone" TEXT,
+  "truckLoad" DOUBLE PRECISION DEFAULT 0,
+  "truckLoadUnit" TEXT,
   "date" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
