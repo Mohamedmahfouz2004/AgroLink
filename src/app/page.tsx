@@ -12,7 +12,16 @@ import { format, isToday } from 'date-fns';
 import { fetchAllData } from './actions';
 
 // ===== Custom Modal System =====
-type ModalType = 'alert' | 'confirm' | 'prompt' | 'select';
+type ModalType = 'alert' | 'confirm' | 'prompt' | 'select' | 'form';
+
+export interface FormField {
+  name: string;
+  label: string;
+  type: 'text' | 'number' | 'select';
+  options?: { value: string; label: string }[];
+  placeholder?: string;
+}
+
 interface ModalState {
   type: ModalType;
   title: string;
@@ -20,6 +29,7 @@ interface ModalState {
   inputLabel?: string;
   inputDefault?: string;
   options?: { value: string; label: string }[];
+  fields?: FormField[];
   variant?: 'success' | 'error' | 'warning' | 'info';
   resolve: (value: any) => void;
 }
@@ -29,11 +39,13 @@ const ModalContext = createContext<{
   showConfirm: (title: string, message?: string) => Promise<boolean>;
   showPrompt: (title: string, inputLabel?: string, defaultValue?: string) => Promise<string | null>;
   showSelect: (title: string, options: { value: string; label: string }[]) => Promise<string | null>;
+  showForm: (title: string, fields: FormField[]) => Promise<Record<string, string> | null>;
 }>({
   showAlert: async () => {},
   showConfirm: async () => false,
   showPrompt: async () => null,
   showSelect: async () => null,
+  showForm: async () => null,
 });
 
 function useModal() { return useContext(ModalContext); }
@@ -43,6 +55,7 @@ function ModalProvider({ children }: { children: React.ReactNode }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [inputValue, setInputValue] = useState('');
   const [selectedValue, setSelectedValue] = useState('');
+  const [formValues, setFormValues] = useState<Record<string, string>>({});
 
   const showAlert = useCallback((title: string, variant: 'success' | 'error' | 'warning' | 'info' = 'info') => {
     return new Promise<void>((resolve) => {
@@ -70,6 +83,17 @@ function ModalProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const showForm = useCallback((title: string, fields: FormField[]) => {
+    return new Promise<Record<string, string> | null>((resolve) => {
+      const initial: Record<string, string> = {};
+      fields.forEach(f => {
+        initial[f.name] = f.type === 'select' && f.options?.length ? f.options[0].value : '';
+      });
+      setFormValues(initial);
+      setModal({ type: 'form', title, fields, resolve });
+    });
+  }, []);
+
   const close = (value: any) => {
     modal?.resolve(value);
     setModal(null);
@@ -89,7 +113,7 @@ function ModalProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <ModalContext.Provider value={{ showAlert, showConfirm, showPrompt, showSelect }}>
+    <ModalContext.Provider value={{ showAlert, showConfirm, showPrompt, showSelect, showForm }}>
       {children}
       <AnimatePresence>
         {modal && (
@@ -151,6 +175,37 @@ function ModalProvider({ children }: { children: React.ReactNode }) {
                 </div>
               )}
 
+              {/* Form inputs */}
+              {modal.type === 'form' && modal.fields && (
+                <div className="mb-4 space-y-4 max-h-[60vh] overflow-y-auto p-1">
+                  {modal.fields.map(f => (
+                    <div key={f.name}>
+                      <label className="block text-sm font-medium mb-2">{f.label}</label>
+                      {f.type === 'select' ? (
+                        <select
+                          value={formValues[f.name] || ''}
+                          onChange={e => setFormValues(prev => ({ ...prev, [f.name]: e.target.value }))}
+                          className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:border-primary outline-none transition-colors appearance-none"
+                        >
+                          <option value="" disabled>اختر...</option>
+                          {f.options?.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type={f.type}
+                          value={formValues[f.name] || ''}
+                          onChange={e => setFormValues(prev => ({ ...prev, [f.name]: e.target.value }))}
+                          className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:border-primary outline-none transition-colors"
+                          placeholder={f.placeholder}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {/* Buttons */}
               <div className="flex gap-3 mt-6">
                 {modal.type === 'alert' && (
@@ -168,12 +223,12 @@ function ModalProvider({ children }: { children: React.ReactNode }) {
                     </button>
                   </>
                 )}
-                {modal.type === 'prompt' && (
+                {(modal.type === 'prompt' || modal.type === 'form') && (
                   <>
                     <button onClick={() => close(null)} className="flex-1 bg-secondary text-foreground py-2.5 rounded-xl font-medium hover:bg-secondary/80 transition-colors">
                       إلغاء
                     </button>
-                    <button onClick={() => close(inputValue || null)} className="flex-1 bg-primary text-white py-2.5 rounded-xl font-medium hover:bg-primary/90 transition-colors">
+                    <button onClick={() => close(modal.type === 'form' ? formValues : (inputValue || null))} className="flex-1 bg-primary text-white py-2.5 rounded-xl font-medium hover:bg-primary/90 transition-colors">
                       تأكيد
                     </button>
                   </>
@@ -955,7 +1010,7 @@ function TrucksView() {
 
 function FarmsView() {
   const { farms, truckRegistrations, transactions, users, addReceipt, addFarm } = useStore();
-  const { showAlert, showConfirm, showPrompt, showSelect } = useModal();
+  const { showAlert, showConfirm, showPrompt, showSelect, showForm } = useModal();
   const [selectedFarmId, setSelectedFarmId] = useState<string | null>(null);
   const todayStr = new Date().toISOString().split('T')[0];
   const [fromDate, setFromDate] = useState<string>(todayStr);
@@ -1002,14 +1057,20 @@ function FarmsView() {
           </div>
           <div className="flex items-center gap-3">
             <button onClick={async () => {
-                const amount = await showPrompt('تسليم عهدة', 'أدخل المبلغ (مثال: 5000)');
-                if (!amount) return;
-                const workerId = await showSelect('اختر العامل أو المدير', farmUsers.map(u => ({ value: u.id, label: u.fullName })));
-                if (!workerId || !farmUsers.find((u: any) => u.id === workerId)) {
+                const formValues = await showForm('تسليم عهدة', [
+                  { name: 'amount', label: 'أدخل المبلغ (مثال: 5000)', type: 'number', placeholder: 'اكتب هنا...' },
+                  { name: 'workerId', label: 'اختر العامل أو المدير', type: 'select', options: farmUsers.map(u => ({ value: u.id, label: u.fullName })) }
+                ]);
+                
+                if (!formValues || !formValues.amount || !formValues.workerId) return;
+
+                const workerId = formValues.workerId;
+                if (!farmUsers.find((u: any) => u.id === workerId)) {
                   await showAlert('عامل غير صحيح', 'error');
                   return;
                 }
-                addReceipt(parseFloat(amount), workerId, selectedFarmId!, `تسليم عهدة نقدي للمزرعة`);
+                
+                addReceipt(parseFloat(formValues.amount), workerId, selectedFarmId!, `تسليم عهدة نقدي للمزرعة`);
                 await showAlert('تم تسجيل العهدة بنجاح!', 'success');
             }} className="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 shadow-sm transition-colors">
               <Plus size={18} /> تسليم فلوس
