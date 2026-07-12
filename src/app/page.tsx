@@ -250,6 +250,9 @@ export const formatArabicDate = (dString: string, includeTime = false) => {
   return `${dayName} ${dateFormatted}`;
 };
 
+export const getLocalTodayString = () => format(new Date(), 'yyyy-MM-dd');
+
+
 export default function Dashboard() {
   const { currentUser, login, logout, transactions, truckRegistrations, expenses } = useStore();
   const [mounted, setMounted] = useState(false);
@@ -680,7 +683,7 @@ function StatCard({ title, value, icon: Icon, trend, action }: any) {
 }
 
 function TrucksView() {
-  const { truckRegistrations, truckTypes, registerTruck, updateTruck, currentUser, users } = useStore();
+  const { truckRegistrations, truckTypes, registerTruck, updateTruck, currentUser, users, farms } = useStore();
   const [isOpen, setIsOpen] = useState(false);
   const [editingTruckId, setEditingTruckId] = useState<string | null>(null);
   const [filterMode, setFilterMode] = useState<'TODAY' | 'ALL' | 'RANGE'>('TODAY');
@@ -744,8 +747,9 @@ function TrucksView() {
     }
     
     const truckNumber = `${l1} ${l2} ${l3} - ${nums}`.trim();
-    const today = new Date().toISOString().split('T')[0];
-    const farmId = currentUser!.farmId || 'f1';
+    const today = getLocalTodayString();
+    const farmId = (formData.get('farmId') as string) || currentUser!.farmId;
+    if (!farmId) return;
     
     const existing = truckRegistrations.find(t => 
       t.truckNumber === truckNumber && 
@@ -775,7 +779,7 @@ function TrucksView() {
     const payload = {
       truckNumber,
       truckTypeId: formData.get('truckTypeId') as string,
-      farmId: currentUser!.farmId || 'f1', // fallback
+      farmId: (formData.get('farmId') as string) || currentUser!.farmId!,
       workerId: currentUser!.id,
       custodyAmount: parseFloat(formData.get('custodyAmount') as string) || 0,
       overnightAmount: parseFloat(formData.get('overnightAmount') as string) || 0,
@@ -987,6 +991,17 @@ function TrucksView() {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
+                {currentUser?.role === 'SUPER_ADMIN' && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">المزرعة</label>
+                    <select required name="farmId" defaultValue={editingTruck?.farmId || ''} className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-2 focus:border-primary outline-none">
+                      <option value="" disabled>اختر المزرعة...</option>
+                      {farms.map(f => (
+                        <option key={f.id} value={f.id}>{f.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label className="block text-sm font-medium mb-1">العهدة</label>
                   <input type="number" step="0.01" name="custodyAmount" defaultValue={editingTruck?.custodyAmount || 0} className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-2 focus:border-primary outline-none" />
@@ -1012,7 +1027,7 @@ function FarmsView() {
   const { farms, truckRegistrations, transactions, users, addReceipt, addFarm } = useStore();
   const { showAlert, showConfirm, showPrompt, showSelect, showForm } = useModal();
   const [selectedFarmId, setSelectedFarmId] = useState<string | null>(null);
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalTodayString();
   const [fromDate, setFromDate] = useState<string>(todayStr);
   const [toDate, setToDate] = useState<string>(todayStr);
   const [showReceiptsModal, setShowReceiptsModal] = useState(false);
@@ -1761,9 +1776,8 @@ function TransactionsView() {
   const [filterFromDate, setFilterFromDate] = useState<string>('');
   const [filterToDate, setFilterToDate] = useState<string>('');
   
-  const adminIds = users.filter(u => u.role !== 'WORKER').map(u => u.id);
   const visibleTransactions = transactions.filter(t => {
-    if (!t.workerId || !adminIds.includes(t.workerId as string)) return false;
+    if (t.type === 'CUSTODY' || t.type === 'OVERNIGHT') return false;
     if (currentUser?.role === 'SUPER_ADMIN') return true;
     return t.farmId === currentUser?.farmId;
   });
@@ -2054,10 +2068,32 @@ function WorkerFinancesView() {
   const [trxType, setTrxType] = useState<'RECEIPT' | 'EXPENSE'>('RECEIPT');
   const [catSelection, setCatSelection] = useState<string>('');
   const [otherCatName, setOtherCatName] = useState('');
+  
+  const [viewTab, setViewTab] = useState<'RECEIPTS' | 'EXPENSES'>('RECEIPTS');
+  const todayStr = getLocalTodayString();
+  const [fromDate, setFromDate] = useState<string>(todayStr);
+  const [toDate, setToDate] = useState<string>(todayStr);
 
   const workerTransactions = transactions.filter(t => t.workerId === currentUser?.id);
-  const totalReceived = workerTransactions.filter(t => t.type === 'RECEIPT').reduce((sum, t) => sum + t.amount, 0);
-  const totalSpent = workerTransactions.filter(t => t.type !== 'RECEIPT').reduce((sum, t) => sum + t.amount, 0);
+  
+  let filteredTransactions = workerTransactions;
+  if (fromDate) {
+    const fDate = new Date(fromDate);
+    fDate.setHours(0,0,0,0);
+    filteredTransactions = filteredTransactions.filter(t => new Date(t.date) >= fDate);
+  }
+  if (toDate) {
+    const tDate = new Date(toDate);
+    tDate.setHours(23,59,59,999);
+    filteredTransactions = filteredTransactions.filter(t => new Date(t.date) <= tDate);
+  }
+
+  const receiptsList = filteredTransactions.filter(t => t.type === 'RECEIPT').sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const expensesList = filteredTransactions.filter(t => t.type !== 'RECEIPT').sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const displayList = viewTab === 'RECEIPTS' ? receiptsList : expensesList;
+
+  const totalReceived = receiptsList.reduce((sum, t) => sum + t.amount, 0);
+  const totalSpent = expensesList.reduce((sum, t) => sum + t.amount, 0);
 
   const handleRegister = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -2087,30 +2123,155 @@ function WorkerFinancesView() {
     setOtherCatName('');
   };
 
+  const handleExportExcel = () => {
+    const tableHTML = `
+      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+      <head>
+        <meta charset="utf-8">
+        <style>
+          table { border-collapse: collapse; width: 100%; direction: rtl; font-family: sans-serif; }
+          th, td { border: 1px solid #000; padding: 10px; text-align: center; vertical-align: middle; }
+          th { background-color: #f2f2f2; font-weight: bold; font-size: 14pt; }
+          .header-row { background-color: #e6e6e6; font-size: 16pt; font-weight: bold; height: 50px; text-align: right; padding-right: 15px; }
+          .amount-green { color: #166534; font-weight: bold; }
+          .amount-red { color: #991b1b; font-weight: bold; }
+          .text-left { text-align: left; }
+        </style>
+      </head>
+      <body>
+        <table>
+          <tr>
+            <td colspan="4" class="header-row">
+              كشف حساب العامل: ${currentUser?.fullName}
+              ${fromDate ? ` | من: ${fromDate}` : ''} 
+              ${toDate ? ` | إلى: ${toDate}` : ''}
+              | نوع الكشف: ${viewTab === 'RECEIPTS' ? 'الاستلامات' : 'المصروفات'}
+            </td>
+          </tr>
+          <tr>
+            <th>النوع</th>
+            <th>المبلغ</th>
+            <th>التفاصيل / الملاحظة</th>
+            <th>التاريخ</th>
+          </tr>
+          ${displayList.map(trx => {
+            const isReceipt = trx.type === 'RECEIPT';
+            const typeStr = trx.type === 'RECEIPT' ? 'استلام نقدية' : 
+                            trx.type === 'EXPENSE' ? 'مصروف' : 
+                            trx.type === 'CUSTODY' ? 'عهدة سيارة' : 
+                            trx.type === 'OVERNIGHT' ? 'مبيت سيارة' : trx.type;
+            const amountStr = (isReceipt ? '+' : '-') + trx.amount.toFixed(2);
+            const dateStr = formatArabicDate(trx.date, true);
+            
+            return `
+              <tr>
+                <td>${typeStr}</td>
+                <td class="${isReceipt ? 'amount-green' : 'amount-red'}" dir="ltr" style="mso-number-format:'\\@';">${amountStr}</td>
+                <td>${trx.description || '-'}</td>
+                <td class="text-left" style="mso-number-format:'\\@';">${dateStr}</td>
+              </tr>
+            `;
+          }).join('')}
+        </table>
+      </body>
+      </html>
+    `;
+
+    const blob = new Blob([tableHTML], { type: 'application/vnd.ms-excel' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Worker_Finances_${format(new Date(), 'yyyyMMdd_HHmm')}.xls`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6">
+      <div className="hidden print:block mb-8 text-center" dir="rtl">
+        <h1 className="text-3xl font-bold mb-4">كشف حساب عامل - أجرو لينك</h1>
+        <div className="grid grid-cols-2 gap-4 text-right border-2 border-black p-4 mb-4 font-bold text-sm bg-gray-50">
+          <div>العامل: {currentUser?.fullName}</div>
+          <div>تاريخ التقرير: {format(new Date(), 'dd/MM/yyyy HH:mm')}</div>
+          {fromDate && <div>من تاريخ: {fromDate}</div>}
+          {toDate && <div>إلى تاريخ: {toDate}</div>}
+          <div>القسم: {viewTab === 'RECEIPTS' ? 'الاستلامات' : 'المصروفات'}</div>
+        </div>
+      </div>
+
+      <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6 print:hidden">
         <div>
           <h1 className="text-3xl font-bold tracking-tight mb-2">الماليات والمصروفات</h1>
           <p className="text-muted-foreground">سجل الفلوس اللي استلمتها واللي صرفتها.</p>
         </div>
-        <button onClick={() => setIsOpen(true)} className="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition-all shadow-sm">
-          <Plus size={18} /> إضافة عملية
-        </button>
+        <div className="flex gap-3">
+          <button onClick={() => setIsOpen(true)} className="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition-all shadow-sm">
+            <Plus size={18} /> إضافة عملية
+          </button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8 print:hidden">
          <div className="glass p-6 rounded-xl border border-border/50 text-center">
-            <h3 className="text-muted-foreground mb-2">إجمالي اللي استلمته</h3>
+            <h3 className="text-muted-foreground mb-2">إجمالي اللي استلمته (في هذه الفترة)</h3>
             <p className="text-3xl font-bold text-green-500" dir="ltr">+${totalReceived.toFixed(2)}</p>
          </div>
          <div className="glass p-6 rounded-xl border border-border/50 text-center">
-            <h3 className="text-muted-foreground mb-2">إجمالي اللي صرفته</h3>
+            <h3 className="text-muted-foreground mb-2">إجمالي اللي صرفته (في هذه الفترة)</h3>
             <p className="text-3xl font-bold text-red-500" dir="ltr">-${totalSpent.toFixed(2)}</p>
          </div>
       </div>
 
+      <div className="glass p-4 rounded-xl border border-border/50 mb-6 flex flex-col xl:flex-row gap-4 xl:items-center justify-between print:hidden">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex gap-2 p-1 bg-secondary/50 rounded-lg">
+            <button 
+              onClick={() => setViewTab('RECEIPTS')}
+              className={clsx("px-4 py-2 rounded-md font-medium transition-colors text-sm", viewTab === 'RECEIPTS' ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")}
+            >الاستلامات</button>
+            <button 
+              onClick={() => setViewTab('EXPENSES')}
+              className={clsx("px-4 py-2 rounded-md font-medium transition-colors text-sm", viewTab === 'EXPENSES' ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")}
+            >المصروفات والعهد</button>
+          </div>
+          
+          <div className="h-6 w-px bg-border hidden xl:block"></div>
+          
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-medium whitespace-nowrap">من تاريخ:</label>
+            <input 
+              type="date" 
+              value={fromDate}
+              onChange={e => setFromDate(e.target.value)}
+              className="bg-secondary/50 border border-border rounded-lg h-10 px-4 text-sm focus:border-primary outline-none"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-medium whitespace-nowrap">إلى تاريخ:</label>
+            <input 
+              type="date" 
+              value={toDate}
+              onChange={e => setToDate(e.target.value)}
+              className="bg-secondary/50 border border-border rounded-lg h-10 px-4 text-sm focus:border-primary outline-none"
+            />
+          </div>
+        </div>
+        
+        <div className="flex gap-2 mt-4 xl:mt-0">
+          <button onClick={handleExportExcel} className="bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded-lg font-medium flex items-center gap-2 transition-all shadow-sm text-sm">
+            <FileText size={16} /> Excel
+          </button>
+          <button onClick={() => window.print()} className="bg-secondary text-foreground hover:bg-secondary/80 px-3 py-2 rounded-lg font-medium flex items-center gap-2 transition-all shadow-sm text-sm">
+            <Activity size={16} /> طباعة
+          </button>
+        </div>
+      </div>
+
       <div className="glass rounded-2xl border border-border/50 overflow-hidden">
+        <div className="p-4 bg-secondary/30 border-b border-border/50 font-bold text-lg print:hidden">
+          {viewTab === 'RECEIPTS' ? 'سجل الاستلامات (الفلوس اللي دخلتلك)' : 'سجل المصروفات (الفلوس اللي صرفتها)'}
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-right">
             <thead className="bg-secondary/50 border-b border-border/50">
@@ -2122,13 +2283,13 @@ function WorkerFinancesView() {
               </tr>
             </thead>
             <tbody>
-              {workerTransactions.map(trx => {
+              {displayList.map(trx => {
                 const isReceipt = trx.type === 'RECEIPT';
                 return (
                   <tr key={trx.id} className="border-b border-border/10 hover:bg-secondary/10">
                     <td className="p-4">
                       <span className={clsx(
-                        "px-3 py-1 rounded-full text-xs font-medium",
+                        "px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap",
                         isReceipt ? "bg-green-500/10 text-green-500" : 
                         trx.type === 'EXPENSE' ? "bg-red-500/10 text-red-500" : 
                         "bg-blue-500/10 text-blue-500"
@@ -2147,9 +2308,9 @@ function WorkerFinancesView() {
                   </tr>
                 )
               })}
-              {workerTransactions.length === 0 && (
+              {displayList.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="p-8 text-center text-muted-foreground">مفيش حركات مسجلة.</td>
+                  <td colSpan={4} className="p-8 text-center text-muted-foreground">مفيش حركات مسجلة في القسم ده للفترة المحددة.</td>
                 </tr>
               )}
             </tbody>
@@ -2158,7 +2319,7 @@ function WorkerFinancesView() {
       </div>
 
       {isOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
           <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-card w-full max-w-md rounded-2xl p-6 shadow-2xl border border-border/50">
             <h2 className="text-2xl font-bold mb-6">تسجيل نقدية / مصروف</h2>
             

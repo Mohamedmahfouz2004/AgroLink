@@ -128,7 +128,10 @@ export const useStore = create<StoreState>()(
       closures: [],
       currentUser: null,
 
-      initStore: (data) => set(() => ({ ...data })),
+      initStore: (data) => set((state) => {
+        const stillExists = state.currentUser ? data.users?.some((u: any) => u.id === state.currentUser!.id) : true;
+        return { ...data, currentUser: stillExists ? state.currentUser : null };
+      }),
 
       login: (username: string, password: string) => {
         const user = get().users.find(u => u.username === username);
